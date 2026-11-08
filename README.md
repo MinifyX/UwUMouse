@@ -1,3 +1,42 @@
+# UwUMouse
+
+A fork of [Lan Mouse](https://github.com/feschber/lan-mouse) with Mouse-without-Borders-style extras:
+
+- **Ctrl-gated edge switching** – the pointer only crosses to another device while Ctrl is held.
+  Without Ctrl the edge acts as a wall.
+- **Game block list** – switching is disabled while a listed program (or any fullscreen window) is in the foreground (Windows).
+- **Clipboard and file sync** – when control moves to another device, the clipboard follows
+  (text, HTML, images, copied files). Received files land in `Downloads/UwUMouse/<timestamp>/`
+  and are on the clipboard, so <kbd>Ctrl</kbd>+<kbd>V</kbd> in a file manager pastes them.
+
+```toml
+[switch]
+require_ctrl = true                          # default
+blocked_processes = ["cs2.exe", "eldenring"]  # case-insensitive, .exe optional
+block_fullscreen = false                     # default
+
+[transfer]
+clipboard = true      # default
+files = true          # default
+max_file_mib = 4096   # default
+# receive_dir = "D:/Incoming"
+```
+
+Clipboard and files use TLS over **TCP port + 1** (default `4243`), authenticated with the same
+certificate fingerprints as input. Open it in the firewall next to UDP `4242`, e.g. on Windows:
+
+```powershell
+New-NetFirewallRule -DisplayName "UwUMouse" -Direction Inbound -Protocol UDP -LocalPort 4242 -Action Allow
+New-NetFirewallRule -DisplayName "UwUMouse data" -Direction Inbound -Protocol TCP -LocalPort 4243 -Action Allow
+```
+
+Notes:
+- The device that initiates control (the one with the client configured) opens the data
+  connection; clipboard flows both ways over it.
+- Like the input channel, the connecting side does not verify the peer's certificate.
+
+---
+
 # Lan Mouse
 
 [![CI](https://github.com/feschber/lan-mouse/actions/workflows/rust.yml/badge.svg)](https://github.com/feschber/lan-mouse/actions/workflows/rust.yml) [![Cachix](https://github.com/feschber/lan-mouse/actions/workflows/cachix.yml/badge.svg)](https://github.com/feschber/lan-mouse/actions/workflows/cachix.yml) [![Release](https://github.com/feschber/lan-mouse/actions/workflows/release.yml/badge.svg)](https://github.com/feschber/lan-mouse/actions/workflows/release.yml)
