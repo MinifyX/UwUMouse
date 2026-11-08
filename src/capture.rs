@@ -9,7 +9,7 @@ use input_capture::{
     CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, Position,
 };
 use input_capture::gate;
-use input_event::{Event, KeyboardEvent, scancode};
+use input_event::{Event, KeyboardEvent, PointerEvent, scancode};
 use lan_mouse_proto::ProtoEvent;
 use local_channel::mpsc::{Receiver, Sender, channel};
 use tokio::task::{JoinHandle, spawn_local};
@@ -90,7 +90,8 @@ impl Capture {
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
-            gate_pending: None,
+            gate_hold: None,
+            unreachable: None,
         };
         let task = spawn_local(capture_task.run());
         Self {
@@ -175,16 +176,31 @@ struct CaptureTask {
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
-    /// capture was entered but the switch gate still waits to learn
-    /// whether Ctrl is held (Wayland: only known from captured events)
-    gate_pending: Option<(CaptureHandle, Instant)>,
+    /// The pointer hit a barrier but the switch gate did not (yet) allow
+    /// switching. Instead of releasing right away (which makes the
+    /// compositor re-activate in a tight loop while the user keeps pushing)
+    /// the capture is held, so the edge acts as a wall: pressing Ctrl
+    /// switches, moving back / pausing / any other input releases.
+    gate_hold: Option<GateHold>,
+    /// client we failed to send to and when; entering it is treated like a
+    /// closed gate for [`UNREACHABLE_COOLDOWN`] so an offline peer does not
+    /// cause an activate/release loop at the edge
+    unreachable: Option<(CaptureHandle, Instant)>,
 }
 
-/// how long to wait for the compositor to report modifier state after entering
-const GATE_TIMEOUT: Duration = Duration::from_millis(150);
+const UNREACHABLE_COOLDOWN: Duration = Duration::from_secs(2);
 
-/// xkb modifier mask for Control
-const XKB_CTRL_MASK: u32 = 1 << 2;
+#[derive(Clone, Copy, Debug)]
+struct GateHold {
+    handle: CaptureHandle,
+    /// last motion pushing into the edge
+    last_push: Instant,
+}
+
+/// release a held capture after this long without pushing into the edge
+const HOLD_IDLE: Duration = Duration::from_millis(120);
+
+use input_event::modifier_state::XKB_CTRL_MASK;
 
 fn is_ctrl_down(event: &CaptureEvent) -> bool {
     match event {
@@ -199,9 +215,33 @@ fn is_ctrl_down(event: &CaptureEvent) -> bool {
     }
 }
 
-async fn gate_deadline(pending: Option<(CaptureHandle, Instant)>) {
-    match pending {
-        Some((_, since)) => tokio::time::sleep_until((since + GATE_TIMEOUT).into()).await,
+/// whether a relative motion moves away from the edge at `pos`
+fn moves_away(pos: Position, dx: f64, dy: f64) -> bool {
+    match pos {
+        Position::Right => dx < 0.,
+        Position::Left => dx > 0.,
+        Position::Top => dy > 0.,
+        Position::Bottom => dy < 0.,
+    }
+}
+
+/// Some(reason) if the gate currently forbids switching; `event` may
+/// carry modifier state the OS query does not know yet.
+fn gate_block_reason(event: Option<&CaptureEvent>) -> Option<String> {
+    let g = gate::switch_gate();
+    if let Some(reason) = gate::foreground_block_reason(&g) {
+        return Some(reason);
+    }
+    let ctrl = event.is_some_and(is_ctrl_down) || gate::ctrl_held() == Some(true);
+    if g.require_ctrl && !ctrl {
+        return Some("ctrl not held".into());
+    }
+    None
+}
+
+async fn gate_deadline(hold: Option<GateHold>) {
+    match hold {
+        Some(h) => tokio::time::sleep_until((h.last_push + HOLD_IDLE).into()).await,
         None => futures::future::pending().await,
     }
 }
@@ -227,6 +267,19 @@ impl CaptureTask {
             .find(|(h, ..)| *h == handle)
             .expect("no such capture")
             .1
+    }
+
+    fn is_unreachable(&self, handle: CaptureHandle) -> bool {
+        self.unreachable
+            .is_some_and(|(h, t)| h == handle && t.elapsed() < UNREACHABLE_COOLDOWN)
+    }
+
+    /// Some(reason) if switching to `handle` is currently not allowed
+    fn block_reason(&self, handle: CaptureHandle, event: Option<&CaptureEvent>) -> Option<String> {
+        if self.is_unreachable(handle) {
+            return Some("client unreachable".into());
+        }
+        gate_block_reason(event)
     }
 
     fn get_type(&self, handle: CaptureHandle) -> CaptureType {
@@ -308,9 +361,9 @@ impl CaptureTask {
                     Some(event) => self.handle_capture_event(capture, event?).await?,
                     None => return Ok(()),
                 },
-                _ = gate_deadline(self.gate_pending) => {
-                    log::info!("not switching: ctrl not held");
-                    self.gate_pending = None;
+                _ = gate_deadline(self.gate_hold) => {
+                    log::debug!("edge hold: idle, releasing");
+                    self.gate_hold = None;
                     capture.release().await?;
                 },
                 (handle, event) = self.conn.recv() => {
@@ -377,40 +430,60 @@ impl CaptureTask {
 
         if capture.keys_pressed(&self.release_bind.borrow()) {
             log::info!("releasing capture: release-bind pressed");
-            self.gate_pending = None;
             return self.release_capture(capture).await;
         }
 
-        // switch gate: decide whether this entry may actually switch
-        if let Some((pending_handle, _)) = self.gate_pending {
-            if !is_ctrl_down(&event) {
-                // swallow input until we know; the deadline releases otherwise
+        // switch gate: the pointer is held at the edge, decide what to do
+        if let Some(hold) = self.gate_hold {
+            if self.block_reason(hold.handle, Some(&event)).is_none() {
+                log::info!("switch gate passed");
+                self.gate_hold = None;
+                handle = hold.handle;
+                event = CaptureEvent::Begin;
+            } else {
+                let release = match event {
+                    CaptureEvent::Input(Event::Pointer(PointerEvent::Motion { dx, dy, .. })) => {
+                        if moves_away(self.get_pos(hold.handle), dx, dy) {
+                            true
+                        } else {
+                            self.gate_hold = Some(GateHold {
+                                last_push: Instant::now(),
+                                ..hold
+                            });
+                            false
+                        }
+                    }
+                    // modifier updates and frames don't end the hold
+                    CaptureEvent::Input(Event::Keyboard(KeyboardEvent::Modifiers { .. }))
+                    | CaptureEvent::Begin => false,
+                    // a click, scroll or key press means the user does something else
+                    CaptureEvent::Input(_) => true,
+                };
+                if release {
+                    log::debug!("edge hold: released by input");
+                    self.gate_hold = None;
+                    capture.release().await?;
+                }
                 return Ok(());
             }
-            self.gate_pending = None;
-            handle = pending_handle;
-            event = CaptureEvent::Begin;
+        } else if event != CaptureEvent::Begin
+            && self.active_client.is_none()
+            && self.get_type(handle) == CaptureType::Default
+        {
+            // stray input from an entry the gate rejected: it already went
+            // back to the local desktop, so neither forward nor release again
+            return Ok(());
         } else if event == CaptureEvent::Begin
             && self.get_type(handle) == CaptureType::Default
             && Some(handle) != self.active_client
         {
-            let g = gate::switch_gate();
-            if let Some(reason) = gate::foreground_block_reason(&g) {
+            if let Some(reason) = self.block_reason(handle, None) {
                 log::info!("not switching: {reason}");
-                return capture.release().await;
-            }
-            if g.require_ctrl {
-                match gate::ctrl_held() {
-                    Some(true) => {}
-                    Some(false) => {
-                        log::info!("not switching: ctrl not held");
-                        return capture.release().await;
-                    }
-                    None => {
-                        self.gate_pending = Some((handle, Instant::now()));
-                        return Ok(());
-                    }
-                }
+                self.gate_hold = Some(GateHold {
+                    handle,
+                    last_push: Instant::now(),
+                });
+                return Ok(());
             }
         }
 
@@ -455,6 +528,7 @@ impl CaptureTask {
         if let Err(e) = self.conn.send(event, handle).await {
             const DUR: Duration = Duration::from_millis(500);
             debounce!(PREV_LOG, DUR, log::warn!("releasing capture: {e}"));
+            self.unreachable = Some((handle, Instant::now()));
             // Funnel through release_capture so the leave_hook
             // fires and active_client is cleared (without this the
             // active_client field would stay stale until the next
@@ -465,7 +539,7 @@ impl CaptureTask {
     }
 
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
-        self.gate_pending = None;
+        self.gate_hold = None;
         // If we have an active client, notify them we're leaving
         if let Some(handle) = self.active_client.take() {
             // Surface the leave to the service layer so it can fire

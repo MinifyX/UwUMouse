@@ -354,6 +354,7 @@ async fn ei_event_handler(
             }
             EiEvent::KeyboardModifiers(e) => {
                 log::debug!("modifiers: {e:?}");
+                input_event::modifier_state::set_depressed(e.depressed);
             }
             // only for receiver context
             // EiEvent::Frame(_) => { },

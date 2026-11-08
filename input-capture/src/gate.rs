@@ -173,7 +173,9 @@ mod os {
     use super::SwitchGate;
 
     pub(super) fn ctrl_held() -> Option<bool> {
-        None
+        // reported by the libei emulation backend (KDE sends modifier
+        // changes to sender clients); None until the first report
+        input_event::modifier_state::ctrl_held()
     }
 
     pub(super) fn foreground_block_reason(_gate: &SwitchGate) -> Option<String> {
