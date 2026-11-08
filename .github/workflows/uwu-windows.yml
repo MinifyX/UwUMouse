@@ -1,0 +1,31 @@
+name: "UwUMouse Windows (headless)"
+
+# Fast Windows build without the GTK frontend: the daemon, CLI and
+# config file are enough to run UwUMouse on Windows.
+on:
+  push:
+    branches: [ "uwu/**" ]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+    - uses: actions/checkout@v6
+    - uses: Swatinem/rust-cache@v2
+    - name: Test
+      run: cargo test --no-default-features -p lan-mouse -p input-capture
+    - name: Build
+      run: cargo build --release --no-default-features
+    - name: Package
+      run: |
+        mkdir uwumouse-windows
+        Copy-Item -Path "target\release\lan-mouse.exe" -Destination "uwumouse-windows"
+        Copy-Item -Path "README.md" -Destination "uwumouse-windows"
+    - uses: actions/upload-artifact@v6
+      with:
+        name: uwumouse-windows-x86_64
+        path: uwumouse-windows

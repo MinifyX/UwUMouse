@@ -31,7 +31,7 @@ jobs:
         cargo build --release
         cp target/release/lan-mouse lan-mouse-linux-x86_64
     - name: Install cargo bundle
-      run: cargo install cargo-bundle
+      run: cargo install cargo-bundle --locked
     - name: Bundle
       run: |
         cargo bundle --release
@@ -58,7 +58,7 @@ jobs:
         cargo build --release
         cp target/release/lan-mouse lan-mouse-linux-arm64
     - name: Install cargo bundle
-      run: cargo install cargo-bundle
+      run: cargo install cargo-bundle --locked
     - name: Bundle
       run: |
         cargo bundle --release
@@ -138,7 +138,7 @@ jobs:
     - name: Make icns
       run: scripts/makeicns.sh
     - name: Install cargo bundle
-      run: cargo install cargo-bundle
+      run: cargo install cargo-bundle --locked
     - name: Bundle
       run: |
         cargo bundle --release
@@ -168,7 +168,7 @@ jobs:
     - name: Make icns
       run: scripts/makeicns.sh
     - name: Install cargo bundle
-      run: cargo install cargo-bundle
+      run: cargo install cargo-bundle --locked
     - name: Bundle
       run: |
         cargo bundle --release
