@@ -5,10 +5,10 @@ use std::{
 };
 
 use futures::StreamExt;
+use input_capture::gate;
 use input_capture::{
     CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, Position,
 };
-use input_capture::gate;
 use input_event::{Event, KeyboardEvent, PointerEvent, scancode};
 use lan_mouse_proto::ProtoEvent;
 use local_channel::mpsc::{Receiver, Sender, channel};
@@ -442,7 +442,9 @@ impl CaptureTask {
                 event = CaptureEvent::Begin;
             } else {
                 let release = match event {
-                    CaptureEvent::Input(Event::Pointer(PointerEvent::Motion { dx, dy, .. })) => {
+                    CaptureEvent::Input(Event::Pointer(PointerEvent::Motion {
+                        dx, dy, ..
+                    })) => {
                         if moves_away(self.get_pos(hold.handle), dx, dy) {
                             true
                         } else {

@@ -70,6 +70,20 @@ struct ConfigToml {
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
     switch: Option<SwitchToml>,
+    transfer: Option<TransferToml>,
+}
+
+/// clipboard and file transfer
+#[derive(Clone, Serialize, Deserialize, Debug, Default, Eq, PartialEq)]
+struct TransferToml {
+    /// sync the clipboard when control moves between devices (default: true)
+    clipboard: Option<bool>,
+    /// copy files that are on the clipboard (default: true)
+    files: Option<bool>,
+    /// maximum size of a copied file set in MiB (default: 4096)
+    max_file_mib: Option<u64>,
+    /// where received files go (default: ~/Downloads/UwUMouse)
+    receive_dir: Option<PathBuf>,
 }
 
 /// conditions for crossing a screen edge onto a remote device
@@ -510,6 +524,23 @@ impl Config {
             .as_ref()
             .and_then(|c| c.release_bind.clone())
             .unwrap_or(Vec::from_iter(DEFAULT_RELEASE_KEYS.iter().cloned()))
+    }
+
+    /// clipboard / file transfer settings
+    pub fn transfer(&self) -> crate::transfer::TransferConfig {
+        let default = crate::transfer::TransferConfig::default();
+        let Some(t) = self.config_toml.as_ref().and_then(|c| c.transfer.clone()) else {
+            return default;
+        };
+        crate::transfer::TransferConfig {
+            clipboard: t.clipboard.unwrap_or(default.clipboard),
+            files: t.files.unwrap_or(default.files),
+            max_file_bytes: t
+                .max_file_mib
+                .map(|m| m << 20)
+                .unwrap_or(default.max_file_bytes),
+            receive_dir: t.receive_dir.unwrap_or(default.receive_dir),
+        }
     }
 
     /// edge-switch conditions (Ctrl requirement, game block list)

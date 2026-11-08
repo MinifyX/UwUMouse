@@ -52,6 +52,8 @@ tokio = { version = "1.32.0", features = [
     "sync",
     "signal",
     "time",
+    "fs",
+    "rt-multi-thread",
 ] }
 futures = "0.3.28"
 clap = { version = "4.4.11", features = ["derive"] }
@@ -68,6 +70,8 @@ rustls = { version = "0.23.12", default-features = false, features = [
 rcgen = "0.13.1"
 sha2 = "0.10.8"
 notify = "8.2.0"
+arboard = { version = "3.7", default-features = false, features = ["image-data", "wayland-data-control"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2.148"

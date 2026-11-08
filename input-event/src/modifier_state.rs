@@ -18,7 +18,11 @@ pub const XKB_CTRL_MASK: u32 = 1 << 2;
 
 /// record the depressed xkb modifier mask reported by the compositor
 pub fn set_depressed(depressed: u32) {
-    let state = if depressed & XKB_CTRL_MASK != 0 { DOWN } else { UP };
+    let state = if depressed & XKB_CTRL_MASK != 0 {
+        DOWN
+    } else {
+        UP
+    };
     CTRL.store(state, Ordering::Relaxed);
 }
 

@@ -7,6 +7,7 @@ use crate::{
     dns::{DnsEvent, DnsResolver},
     emulation::{Emulation, EmulationEvent},
     listen::{LanMouseListener, ListenerCreationError},
+    transfer::DataChannel,
 };
 use futures::StreamExt;
 use lan_mouse_ipc::{
@@ -67,6 +68,8 @@ pub struct Service {
     /// map from capture handle to connection info
     incoming_conn_info: HashMap<ClientHandle, Incoming>,
     next_trigger_handle: u64,
+    /// clipboard / file transfer
+    data: DataChannel,
 }
 
 #[derive(Debug)]
@@ -95,6 +98,12 @@ impl Service {
         let listener =
             LanMouseListener::new(config.port(), cert.clone(), authorized_keys.clone()).await?;
         let conn = LanMouseConnection::new(cert.clone(), client_manager.clone());
+        let data = DataChannel::new(
+            config.port().wrapping_add(1),
+            cert.clone(),
+            authorized_keys.clone(),
+            config.transfer(),
+        );
 
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
@@ -124,6 +133,7 @@ impl Service {
             incoming_conn_info: Default::default(),
             incoming_conns: Default::default(),
             next_trigger_handle: 0,
+            data,
         };
         Ok(service)
     }
@@ -261,6 +271,7 @@ impl Service {
         let release_bind = self.config.release_bind();
         self.capture.set_release_bind(release_bind);
         input_capture::set_switch_gate(self.config.switch_gate());
+        self.data.set_config(self.config.transfer());
         let authorized_keys = self.config.authorized_fingerprints();
         self.authorized_keys
             .write()
@@ -343,6 +354,8 @@ impl Service {
                 // => notify it that its capture should be released
                 if let Some(incoming) = self.incoming_conn_info.get(&handle) {
                     self.emulation.send_leave_event(incoming.addr);
+                    // control goes back to the peer: hand over our clipboard
+                    self.data.push_ip(incoming.addr.ip());
                 }
             }
             ICaptureEvent::CaptureDisabled => {
@@ -355,6 +368,10 @@ impl Service {
             }
             ICaptureEvent::ClientEntered(handle) => {
                 log::info!("entering client {handle} ...");
+                // control leaves this device: hand over our clipboard
+                if let Some(addr) = self.client_manager.active_addr(handle) {
+                    self.data.push_to(addr);
+                }
                 self.spawn_hook_command(handle, HookKind::Enter);
             }
             ICaptureEvent::ClientLeft(handle) => {
