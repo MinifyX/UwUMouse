@@ -98,6 +98,7 @@ impl Service {
 
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
+        input_capture::set_switch_gate(config.switch_gate());
         let capture = Capture::new(capture_backend, conn, config.release_bind());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
@@ -259,6 +260,7 @@ impl Service {
         }
         let release_bind = self.config.release_bind();
         self.capture.set_release_bind(release_bind);
+        input_capture::set_switch_gate(self.config.switch_gate());
         let authorized_keys = self.config.authorized_fingerprints();
         self.authorized_keys
             .write()

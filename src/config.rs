@@ -69,6 +69,18 @@ struct ConfigToml {
     cert_path: Option<PathBuf>,
     clients: Option<Vec<TomlClient>>,
     authorized_fingerprints: Option<HashMap<String, String>>,
+    switch: Option<SwitchToml>,
+}
+
+/// conditions for crossing a screen edge onto a remote device
+#[derive(Clone, Serialize, Deserialize, Debug, Default, Eq, PartialEq)]
+struct SwitchToml {
+    /// only cross while Ctrl is held (default: true)
+    require_ctrl: Option<bool>,
+    /// executables that block switching while in the foreground, e.g. `["cs2.exe"]`
+    blocked_processes: Option<Vec<String>>,
+    /// block switching while any fullscreen window is in the foreground (default: false)
+    block_fullscreen: Option<bool>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug, Eq, PartialEq)]
@@ -498,6 +510,19 @@ impl Config {
             .as_ref()
             .and_then(|c| c.release_bind.clone())
             .unwrap_or(Vec::from_iter(DEFAULT_RELEASE_KEYS.iter().cloned()))
+    }
+
+    /// edge-switch conditions (Ctrl requirement, game block list)
+    pub fn switch_gate(&self) -> input_capture::SwitchGate {
+        let default = input_capture::SwitchGate::default();
+        let Some(sw) = self.config_toml.as_ref().and_then(|c| c.switch.clone()) else {
+            return default;
+        };
+        input_capture::SwitchGate {
+            require_ctrl: sw.require_ctrl.unwrap_or(default.require_ctrl),
+            blocked_processes: sw.blocked_processes.unwrap_or_default(),
+            block_fullscreen: sw.block_fullscreen.unwrap_or(default.block_fullscreen),
+        }
     }
 
     /// set configured clients

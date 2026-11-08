@@ -289,6 +289,12 @@ fn check_client_activation(wparam: WPARAM, lparam: LPARAM) -> bool {
         return ret;
     }
 
+    /* switch gate: Ctrl held, no blocked game in foreground */
+    if let Some(reason) = crate::gate::check_switch_now() {
+        log::debug!("not switching to {pos}: {reason}");
+        return ret;
+    }
+
     /* update active client and entry point */
     ACTIVE_CLIENT.replace(Some(pos));
     let entry_point = DISPLAYS.with_borrow(|(displays, _)| {

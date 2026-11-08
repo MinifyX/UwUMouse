@@ -8,6 +8,7 @@ use futures::StreamExt;
 use input_capture::{
     CaptureError, CaptureEvent, CaptureHandle, InputCapture, InputCaptureError, Position,
 };
+use input_capture::gate;
 use input_event::{Event, KeyboardEvent, scancode};
 use lan_mouse_proto::ProtoEvent;
 use local_channel::mpsc::{Receiver, Sender, channel};
@@ -89,6 +90,7 @@ impl Capture {
             request_rx,
             release_bind: Rc::new(RefCell::new(release_bind)),
             state: Default::default(),
+            gate_pending: None,
         };
         let task = spawn_local(capture_task.run());
         Self {
@@ -173,6 +175,35 @@ struct CaptureTask {
     release_bind: Rc<RefCell<Vec<scancode::Linux>>>,
     request_rx: Receiver<CaptureRequest>,
     state: State,
+    /// capture was entered but the switch gate still waits to learn
+    /// whether Ctrl is held (Wayland: only known from captured events)
+    gate_pending: Option<(CaptureHandle, Instant)>,
+}
+
+/// how long to wait for the compositor to report modifier state after entering
+const GATE_TIMEOUT: Duration = Duration::from_millis(150);
+
+/// xkb modifier mask for Control
+const XKB_CTRL_MASK: u32 = 1 << 2;
+
+fn is_ctrl_down(event: &CaptureEvent) -> bool {
+    match event {
+        CaptureEvent::Input(Event::Keyboard(KeyboardEvent::Modifiers { depressed, .. })) => {
+            depressed & XKB_CTRL_MASK != 0
+        }
+        CaptureEvent::Input(Event::Keyboard(KeyboardEvent::Key { key, state: 1, .. })) => {
+            *key == scancode::Linux::KeyLeftCtrl as u32
+                || *key == scancode::Linux::KeyRightCtrl as u32
+        }
+        _ => false,
+    }
+}
+
+async fn gate_deadline(pending: Option<(CaptureHandle, Instant)>) {
+    match pending {
+        Some((_, since)) => tokio::time::sleep_until((since + GATE_TIMEOUT).into()).await,
+        None => futures::future::pending().await,
+    }
 }
 
 impl CaptureTask {
@@ -277,6 +308,11 @@ impl CaptureTask {
                     Some(event) => self.handle_capture_event(capture, event?).await?,
                     None => return Ok(()),
                 },
+                _ = gate_deadline(self.gate_pending) => {
+                    log::info!("not switching: ctrl not held");
+                    self.gate_pending = None;
+                    capture.release().await?;
+                },
                 (handle, event) = self.conn.recv() => {
                     if let Some(active) = self.active_client {
                         if handle != active {
@@ -336,12 +372,46 @@ impl CaptureTask {
         capture: &mut InputCapture,
         event: (CaptureHandle, CaptureEvent),
     ) -> Result<(), CaptureError> {
-        let (handle, event) = event;
+        let (mut handle, mut event) = event;
         log::trace!("({handle}): {event:?}");
 
         if capture.keys_pressed(&self.release_bind.borrow()) {
             log::info!("releasing capture: release-bind pressed");
+            self.gate_pending = None;
             return self.release_capture(capture).await;
+        }
+
+        // switch gate: decide whether this entry may actually switch
+        if let Some((pending_handle, _)) = self.gate_pending {
+            if !is_ctrl_down(&event) {
+                // swallow input until we know; the deadline releases otherwise
+                return Ok(());
+            }
+            self.gate_pending = None;
+            handle = pending_handle;
+            event = CaptureEvent::Begin;
+        } else if event == CaptureEvent::Begin
+            && self.get_type(handle) == CaptureType::Default
+            && Some(handle) != self.active_client
+        {
+            let g = gate::switch_gate();
+            if let Some(reason) = gate::foreground_block_reason(&g) {
+                log::info!("not switching: {reason}");
+                return capture.release().await;
+            }
+            if g.require_ctrl {
+                match gate::ctrl_held() {
+                    Some(true) => {}
+                    Some(false) => {
+                        log::info!("not switching: ctrl not held");
+                        return capture.release().await;
+                    }
+                    None => {
+                        self.gate_pending = Some((handle, Instant::now()));
+                        return Ok(());
+                    }
+                }
+            }
         }
 
         if event == CaptureEvent::Begin {
@@ -395,6 +465,7 @@ impl CaptureTask {
     }
 
     async fn release_capture(&mut self, capture: &mut InputCapture) -> Result<(), CaptureError> {
+        self.gate_pending = None;
         // If we have an active client, notify them we're leaving
         if let Some(handle) = self.active_client.take() {
             // Surface the leave to the service layer so it can fire

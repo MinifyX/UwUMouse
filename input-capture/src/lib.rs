@@ -14,6 +14,9 @@ use input_event::{Event, KeyboardEvent, scancode};
 pub use error::{CaptureCreationError, CaptureError, InputCaptureError};
 
 pub mod error;
+pub mod gate;
+
+pub use gate::{SwitchGate, set_switch_gate};
 
 #[cfg(libei)]
 mod libei;
