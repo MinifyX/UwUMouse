@@ -10,6 +10,8 @@ pub use self::error::{EmulationCreationError, EmulationError, InputEmulationErro
 
 #[cfg(windows)]
 mod windows;
+#[cfg(windows)]
+mod windows_cursor;
 
 #[cfg(x11)]
 mod x11;

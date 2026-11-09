@@ -115,6 +115,7 @@ fn send_input_safe(input: INPUT) {
 }
 
 fn send_mouse_input(mi: MOUSEINPUT) {
+    super::windows_cursor::notify_input();
     send_input_safe(INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 { mi },
