@@ -1921,6 +1921,7 @@ dependencies = [
  "toml_edit 0.22.27",
  "webrtc-dtls",
  "webrtc-util",
+ "zbus",
 ]
 
 [[package]]

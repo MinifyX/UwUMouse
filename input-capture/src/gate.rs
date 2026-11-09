@@ -44,6 +44,29 @@ pub fn switch_gate() -> SwitchGate {
     GATE.read().unwrap_or_else(|e| e.into_inner()).clone()
 }
 
+/// Foreground window as reported by the desktop (KWin script on KDE).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ActiveWindow {
+    pub fullscreen: bool,
+    /// window class / app id, e.g. `steam_app_730` or `firefox`
+    pub class: String,
+    pub pid: u32,
+}
+
+static ACTIVE: RwLock<Option<ActiveWindow>> = RwLock::new(None);
+
+pub fn set_active_window(w: Option<ActiveWindow>) {
+    let mut cur = ACTIVE.write().unwrap_or_else(|e| e.into_inner());
+    if *cur != w {
+        log::debug!("active window: {w:?}");
+        *cur = w;
+    }
+}
+
+pub fn active_window() -> Option<ActiveWindow> {
+    ACTIVE.read().unwrap_or_else(|e| e.into_inner()).clone()
+}
+
 /// Whether Ctrl is held right now, if the OS lets us ask.
 /// `None` on Wayland, where the state is only known from captured events.
 pub fn ctrl_held() -> Option<bool> {
@@ -170,7 +193,7 @@ mod os {
 
 #[cfg(not(windows))]
 mod os {
-    use super::SwitchGate;
+    use super::{SwitchGate, active_window, process_blocked};
 
     pub(super) fn ctrl_held() -> Option<bool> {
         // reported by the libei emulation backend (KDE sends modifier
@@ -178,9 +201,29 @@ mod os {
         input_event::modifier_state::ctrl_held()
     }
 
-    pub(super) fn foreground_block_reason(_gate: &SwitchGate) -> Option<String> {
-        // TODO: KDE/KWin active-window query
-        None
+    /// Uses the active window pushed by the desktop integration
+    /// (KWin script); without it nothing is blocked.
+    pub(super) fn foreground_block_reason(gate: &SwitchGate) -> Option<String> {
+        let w = active_window()?;
+        if gate.block_fullscreen && w.fullscreen {
+            return Some(format!("fullscreen window in foreground: {}", w.class));
+        }
+        if gate.blocked_processes.is_empty() {
+            return None;
+        }
+        let mut names = vec![w.class.clone()];
+        if w.pid != 0 {
+            if let Ok(comm) = std::fs::read_to_string(format!("/proc/{}/comm", w.pid)) {
+                names.push(comm.trim().to_string());
+            }
+            if let Ok(exe) = std::fs::read_link(format!("/proc/{}/exe", w.pid)) {
+                names.push(exe.to_string_lossy().into_owned());
+            }
+        }
+        names
+            .into_iter()
+            .find(|n| !n.is_empty() && process_blocked(n, &gate.blocked_processes))
+            .map(|n| format!("blocked process in foreground: {n}"))
     }
 }
 

@@ -4,7 +4,11 @@ A fork of [Lan Mouse](https://github.com/feschber/lan-mouse) with Mouse-without-
 
 - **Ctrl-gated edge switching** – the pointer only crosses to another device while Ctrl is held.
   Without Ctrl the edge acts as a wall.
-- **Game block list** – switching is disabled while a listed program (or any fullscreen window) is in the foreground (Windows).
+- **Game block list** – switching is disabled while a listed program (or any fullscreen window) is in the foreground.
+  Windows queries the foreground window directly; on KDE Plasma a KWin script (loaded automatically)
+  reports the active window, matched by window class (e.g. `steam_app_730`), process name or executable.
+- **Visible cursor on mouseless Windows machines** – Mouse Keys is turned on when no mouse is attached
+  (Windows hides the pointer otherwise), with a drawn cursor as fallback.
 - **Clipboard and file sync** – when control moves to another device, the clipboard follows
   (text, HTML, images, copied files). Received files land in `Downloads/UwUMouse/<timestamp>/`
   and are on the clipboard, so <kbd>Ctrl</kbd>+<kbd>V</kbd> in a file manager pastes them.

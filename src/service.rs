@@ -108,6 +108,8 @@ impl Service {
         // input capture + emulation
         let capture_backend = config.capture_backend().map(|b| b.into());
         input_capture::set_switch_gate(config.switch_gate());
+        #[cfg(target_os = "linux")]
+        crate::kwin::start();
         let capture = Capture::new(capture_backend, conn, config.release_bind());
         let emulation_backend = config.emulation_backend().map(|b| b.into());
         let emulation = Emulation::new(emulation_backend, listener);
