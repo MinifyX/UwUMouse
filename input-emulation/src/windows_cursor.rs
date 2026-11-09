@@ -18,9 +18,9 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_HREDRAW, CS_VREDRAW, CURSOR_SHOWING, CURSORINFO, CreateWindowExW, DI_NORMAL, DefWindowProcW,
     DispatchMessageW, DrawIconEx, GetCursorInfo, GetCursorPos, GetMessageW, HICON, HWND_TOPMOST,
     IDC_ARROW, LWA_COLORKEY, LoadCursorW, MSG, RegisterClassW, SW_HIDE, SW_SHOWNOACTIVATE,
-    SWP_NOACTIVATE, SWP_NOSIZE, SetLayeredWindowAttributes, SetTimer, SetWindowPos, ShowWindow,
-    TranslateMessage, WM_PAINT, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    SWP_NOACTIVATE, SWP_NOOWNERZORDER, SWP_NOSIZE, SWP_NOZORDER, SetLayeredWindowAttributes,
+    SetTimer, SetWindowPos, ShowWindow, TranslateMessage, WM_PAINT, WM_TIMER, WNDCLASSW,
+    WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::w;
 
@@ -92,6 +92,7 @@ fn run() -> windows::core::Result<()> {
 }
 
 static mut VISIBLE: bool = false;
+static mut LAST_POS: (i32, i32) = (i32::MIN, i32::MIN);
 
 unsafe fn tick(hwnd: HWND) {
     let last = LAST_INPUT.load(Ordering::Relaxed);
@@ -104,18 +105,21 @@ unsafe fn tick(hwnd: HWND) {
         unsafe { GetCursorInfo(&mut info) }.is_ok() && (info.flags.0 & CURSOR_SHOWING.0) != 0;
     let want = active && !system_shows;
     let mut pos = POINT::default();
+    // Only touch the z-order when the overlay appears: re-asserting
+    // HWND_TOPMOST on every tick makes light-dismiss UI (Start menu,
+    // search, tray flyouts) close immediately.
+    let showing_now = unsafe { want && !VISIBLE };
     if want && unsafe { GetCursorPos(&mut pos) }.is_ok() {
-        let _ = unsafe {
-            SetWindowPos(
-                hwnd,
-                Some(HWND_TOPMOST),
-                pos.x,
-                pos.y,
-                0,
-                0,
-                SWP_NOSIZE | SWP_NOACTIVATE,
-            )
-        };
+        unsafe {
+            if showing_now || (pos.x, pos.y) != LAST_POS {
+                LAST_POS = (pos.x, pos.y);
+                let mut flags = SWP_NOSIZE | SWP_NOACTIVATE | SWP_NOOWNERZORDER;
+                if !showing_now {
+                    flags |= SWP_NOZORDER;
+                }
+                let _ = SetWindowPos(hwnd, Some(HWND_TOPMOST), pos.x, pos.y, 0, 0, flags);
+            }
+        }
     }
     unsafe {
         if want != VISIBLE {
