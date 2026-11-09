@@ -30,6 +30,7 @@ pub(crate) struct WindowsEmulation {
 
 impl WindowsEmulation {
     pub(crate) fn new() -> Result<Self, WindowsEmulationCreationError> {
+        super::windows_cursor::enable_mouse_keys_if_mouseless();
         Ok(Self { repeat_task: None })
     }
 }

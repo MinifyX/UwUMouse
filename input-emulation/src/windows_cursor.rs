@@ -163,3 +163,46 @@ unsafe extern "system" fn wnd_proc(
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }
 }
+
+/// Windows only shows its own cursor when a mouse is attached or Mouse
+/// Keys are active. On a mouseless machine, turn Mouse Keys on (active
+/// while NumLock is off) so the real cursor shows everywhere, including
+/// the Start menu, which the overlay cannot draw over.
+pub(crate) fn enable_mouse_keys_if_mouseless() {
+    use windows::Win32::UI::Accessibility::MOUSEKEYS;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        GetSystemMetrics, MKF_AVAILABLE, MKF_MOUSEKEYSON, MKF_REPLACENUMBERS, SM_MOUSEPRESENT,
+        SPI_GETMOUSEKEYS, SPI_SETMOUSEKEYS, SPIF_SENDCHANGE, SPIF_UPDATEINIFILE,
+        SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
+    };
+    let size = std::mem::size_of::<MOUSEKEYS>() as u32;
+    let mut mk = MOUSEKEYS {
+        cbSize: size,
+        ..Default::default()
+    };
+    unsafe {
+        if SystemParametersInfoW(
+            SPI_GETMOUSEKEYS,
+            size,
+            Some(&mut mk as *mut _ as *mut _),
+            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
+        )
+        .is_err()
+        {
+            return;
+        }
+        if mk.dwFlags & MKF_MOUSEKEYSON != 0 || GetSystemMetrics(SM_MOUSEPRESENT) != 0 {
+            return;
+        }
+        mk.dwFlags = (mk.dwFlags | MKF_MOUSEKEYSON | MKF_AVAILABLE) & !MKF_REPLACENUMBERS;
+        match SystemParametersInfoW(
+            SPI_SETMOUSEKEYS,
+            size,
+            Some(&mut mk as *mut _ as *mut _),
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE,
+        ) {
+            Ok(()) => log::info!("no mouse attached: enabled Mouse Keys so the cursor is shown"),
+            Err(e) => log::warn!("could not enable Mouse Keys: {e}"),
+        }
+    }
+}
